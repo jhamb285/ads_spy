@@ -1,0 +1,213 @@
+import "dotenv/config";
+import { google } from "googleapis";
+import OpenAI from "openai";
+
+const requiredEnvVars = [
+  "GOOGLE_SHEETS_ID",
+  "GOOGLE_SERVICE_ACCOUNT_EMAIL",
+  "GOOGLE_SERVICE_ACCOUNT_KEY",
+  "OPENAI_API_KEY",
+] as const;
+
+requiredEnvVars.forEach((key) => {
+  if (!process.env[key]) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+});
+
+const SHEET_ID = process.env.GOOGLE_SHEETS_ID!;
+const SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL!;
+const SERVICE_ACCOUNT_KEY = process
+  .env
+  .GOOGLE_SERVICE_ACCOUNT_KEY!.replace(/\\n/g, "\n");
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
+
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+const auth = new google.auth.JWT(
+  SERVICE_ACCOUNT_EMAIL,
+  undefined,
+  SERVICE_ACCOUNT_KEY,
+  ["https://www.googleapis.com/auth/spreadsheets"],
+);
+
+const sheets = google.sheets({ version: "v4", auth });
+
+type InputRow = {
+  rowIndex: number;
+  id: string;
+  vslText: string;
+  offerUrl: string;
+  competitorData: string;
+  status: string;
+  createdAt: string;
+};
+
+type HookRow = {
+  id: string;
+  inputId: string;
+  hookText: string;
+  hookType: string;
+  model: string;
+  createdAt: string;
+};
+
+async function getPendingInputs(): Promise<InputRow[]> {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: "Input!A2:F",
+  });
+
+  const rows = res.data.values || [];
+  const pending: InputRow[] = [];
+
+  rows.forEach((row, idx) => {
+    const [
+      id = "",
+      vslText = "",
+      offerUrl = "",
+      competitorData = "",
+      status = "",
+      createdAt = "",
+    ] = row;
+
+    if ((status || "").toUpperCase() === "PENDING") {
+      pending.push({
+        rowIndex: idx + 2,
+        id,
+        vslText,
+        offerUrl,
+        competitorData,
+        status,
+        createdAt,
+      });
+    }
+  });
+
+  return pending;
+}
+
+async function generateHooksForVsl(input: InputRow): Promise<HookRow[]> {
+  const now = new Date().toISOString();
+
+  const systemPrompt = `
+You are an A-list direct response copywriter.
+Given a VSL script, offer URL, and optional competitor notes, generate short hooks.
+
+Return JSON ONLY with this shape:
+{
+  "nightmare_hooks": string[],
+  "benefit_hooks": string[],
+  "red_square_hooks": string[],
+  "competitor_inspired_hooks": string[]
+}
+
+Rules:
+- Each hook max 10 words.
+- No line breaks inside a hook.
+- Make them scroll-stopping for Facebook ads.
+`;
+
+  const userPrompt = `
+VSL SCRIPT:
+${input.vslText}
+
+OFFER URL:
+${input.offerUrl}
+
+COMPETITOR DATA:
+${input.competitorData}
+`;
+
+  const response = await openai.responses.create({
+    model: "gpt-5.1-mini",
+    input: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    response_format: { type: "json_object" },
+  });
+
+  const content = response.output?.[0]?.content?.[0];
+  if (!content || content.type !== "output_text") {
+    throw new Error("Unexpected OpenAI response format");
+  }
+
+  const parsed = JSON.parse(content.text);
+
+  const toHookRows = (hooks: string[], hookType: string): HookRow[] =>
+    (hooks || []).map((hook: string, idx: number) => ({
+      id: `${input.id}_${hookType}_${idx}`,
+      inputId: input.id,
+      hookText: hook,
+      hookType,
+      model: "gpt-5.1-mini",
+      createdAt: now,
+    }));
+
+  return [
+    ...toHookRows(parsed.nightmare_hooks, "nightmare"),
+    ...toHookRows(parsed.benefit_hooks, "benefit"),
+    ...toHookRows(parsed.red_square_hooks, "red_square"),
+    ...toHookRows(parsed.competitor_inspired_hooks, "competitor_inspired"),
+  ];
+}
+
+async function appendHooks(hooks: HookRow[]) {
+  if (hooks.length === 0) return;
+
+  const values = hooks.map((h) => [
+    h.id,
+    h.inputId,
+    h.hookText,
+    h.hookType,
+    h.model,
+    h.createdAt,
+  ]);
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SHEET_ID,
+    range: "Hooks!A2:F",
+    valueInputOption: "RAW",
+    requestBody: { values },
+  });
+}
+
+async function markInputAsProcessed(input: InputRow, status: string) {
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `Input!E${input.rowIndex}`,
+    valueInputOption: "RAW",
+    requestBody: { values: [[status]] },
+  });
+}
+
+export async function runOnce() {
+  const pending = await getPendingInputs();
+  if (pending.length === 0) {
+    console.log("No pending inputs found.");
+    return;
+  }
+
+  console.log(`Found ${pending.length} pending inputs`);
+
+  for (const input of pending) {
+    try {
+      console.log(`Processing input ${input.id} at row ${input.rowIndex}`);
+      const hooks = await generateHooksForVsl(input);
+      console.log(`Generated ${hooks.length} hooks for ${input.id}`);
+      await appendHooks(hooks);
+      await markInputAsProcessed(input, "HOOKS_DONE");
+    } catch (error) {
+      console.error(`Failed for input ${input.id}`, error);
+      await markInputAsProcessed(input, "ERROR");
+    }
+  }
+}
+
+runOnce().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+
+

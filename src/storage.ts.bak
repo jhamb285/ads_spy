@@ -1,0 +1,362 @@
+import { Pool, PoolClient } from 'pg';
+import { NormalizedAd } from './normalize';
+import { AdAnalysis } from './llm';
+import { GeminiAnalysis } from './gemini';
+
+/**
+ * PostgreSQL connection pool
+ */
+let pool: Pool | null = null;
+
+/**
+ * Initialize database connection pool
+ */
+export function initializeDatabase(): Pool {
+  if (!pool) {
+    const connectionString = process.env.DATABASE_URL;
+
+    if (!connectionString) {
+      throw new Error('DATABASE_URL environment variable is required');
+    }
+
+    pool = new Pool({
+      connectionString,
+      // Connection pool settings
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+    });
+
+    pool.on('error', (err) => {
+      console.error('❌ Unexpected database error:', err);
+    });
+
+    console.log('✅ Database connection pool initialized');
+  }
+
+  return pool;
+}
+
+/**
+ * Get database pool (initialize if needed)
+ */
+export function getPool(): Pool {
+  if (!pool) {
+    return initializeDatabase();
+  }
+  return pool;
+}
+
+/**
+ * Close database connection pool
+ */
+export async function closeDatabase(): Promise<void> {
+  if (pool) {
+    await pool.end();
+    pool = null;
+    console.log('🔒 Database connection pool closed');
+  }
+}
+
+/**
+ * Check if an ad has been processed (exists in database)
+ */
+export async function hasAdBeenProcessed(adId: string): Promise<boolean> {
+  const db = getPool();
+
+  try {
+    const result = await db.query(
+      'SELECT 1 FROM adspy_ads WHERE ad_id = $1 LIMIT 1',
+      [adId]
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (error) {
+    console.error(`❌ Error checking if ad ${adId} was processed:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Get brand ID by page URL (or return null if not found)
+ */
+export async function getBrandIdByPageUrl(pageUrl: string): Promise<number | null> {
+  const db = getPool();
+
+  try {
+    const result = await db.query(
+      'SELECT id FROM adspy_brands WHERE page_url = $1 LIMIT 1',
+      [pageUrl]
+    );
+
+    if (result.rowCount > 0) {
+      return result.rows[0].id;
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`❌ Error getting brand ID for ${pageUrl}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Save ad to database with full breakdown and analysis
+ */
+export async function saveAd(
+  ad: NormalizedAd,
+  geminiAnalysis?: GeminiAnalysis,
+  openaiAnalysis?: AdAnalysis
+): Promise<void> {
+  const db = getPool();
+
+  try {
+    // Get brand ID from page URL or brand name
+    let brandId: number | null = null;
+    if (ad.raw.snapshot?.pageProfileUri) {
+      brandId = await getBrandIdByPageUrl(ad.raw.snapshot.pageProfileUri);
+    }
+
+    // Prepare Gemini analysis as JSONB
+    const geminiBreakdown = geminiAnalysis ? JSON.stringify({
+      creativeBreakdown: geminiAnalysis.creativeBreakdown,
+      hookAnalysis: geminiAnalysis.hookAnalysis,
+      angleIdentification: geminiAnalysis.angleIdentification,
+      structureExplanation: geminiAnalysis.structureExplanation
+    }) : null;
+
+    // Insert or update ad
+    await db.query(`
+      INSERT INTO adspy_ads (
+        ad_id,
+        brand_id,
+        brand_name,
+        ad_url,
+        ad_creative_url,
+        ad_creative_link_title,
+        ad_creative_link_caption,
+        ad_creative_link_description,
+        ad_creative_body,
+        ad_snapshot_url,
+        ad_delivery_start_time,
+        ad_delivery_end_time,
+        page_id,
+        page_name,
+        is_active,
+        categories,
+        transcript,
+        image_description,
+        image_url,
+        video_url,
+        gemini_breakdown,
+        hook_analysis,
+        angle_analysis,
+        structure_analysis,
+        why_it_works,
+        improvements,
+        rewritten_ad,
+        analyzed_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW()
+      )
+      ON CONFLICT (ad_id) DO UPDATE SET
+        brand_id = EXCLUDED.brand_id,
+        brand_name = EXCLUDED.brand_name,
+        ad_url = EXCLUDED.ad_url,
+        transcript = EXCLUDED.transcript,
+        image_description = EXCLUDED.image_description,
+        image_url = EXCLUDED.image_url,
+        video_url = EXCLUDED.video_url,
+        gemini_breakdown = EXCLUDED.gemini_breakdown,
+        hook_analysis = EXCLUDED.hook_analysis,
+        angle_analysis = EXCLUDED.angle_analysis,
+        structure_analysis = EXCLUDED.structure_analysis,
+        why_it_works = EXCLUDED.why_it_works,
+        improvements = EXCLUDED.improvements,
+        rewritten_ad = EXCLUDED.rewritten_ad,
+        analyzed_at = NOW()
+    `, [
+      ad.id,
+      brandId,
+      ad.brandName,
+      ad.adUrl,
+      ad.raw.snapshot?.cards?.[0]?.resizedImageUrl || ad.raw.snapshot?.images?.[0]?.resizedImageUrl,
+      ad.raw.snapshot?.cards?.[0]?.title || ad.title,
+      ad.raw.snapshot?.caption,
+      ad.raw.snapshot?.cards?.[0]?.linkDescription,
+      ad.text,
+      ad.adUrl,
+      ad.raw.startDateFormatted ? new Date(ad.raw.startDateFormatted) : null,
+      ad.raw.endDateFormatted ? new Date(ad.raw.endDateFormatted) : null,
+      ad.raw.pageId,
+      ad.pageName,
+      ad.raw.isActive,
+      ad.raw.categories || [],
+      ad.videoTranscript,
+      ad.imageDescription,
+      ad.imageUrl,
+      ad.videoUrl,
+      geminiBreakdown,
+      geminiAnalysis?.hookAnalysis,
+      geminiAnalysis?.angleIdentification,
+      geminiAnalysis?.structureExplanation,
+      openaiAnalysis?.whyItWorks,
+      openaiAnalysis?.howToImprove?.join('\n'),
+      openaiAnalysis?.rewrittenAd
+    ]);
+
+    // Update brand last_scraped_at and increment total_ads_scraped
+    if (brandId) {
+      await db.query(`
+        UPDATE adspy_brands
+        SET last_scraped_at = NOW(),
+            total_ads_scraped = total_ads_scraped + 1
+        WHERE id = $1
+      `, [brandId]);
+    }
+
+    console.log(`✅ Saved ad ${ad.id} to database`);
+  } catch (error) {
+    console.error(`❌ Error saving ad ${ad.id} to database:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Search ads by keyword (full-text search)
+ */
+export async function searchAds(query: string, limit: number = 50): Promise<any[]> {
+  const db = getPool();
+
+  try {
+    const result = await db.query(`
+      SELECT
+        id,
+        ad_id,
+        brand_name,
+        ad_creative_body,
+        hook_analysis,
+        angle_analysis,
+        why_it_works,
+        ad_url,
+        image_url,
+        video_url,
+        is_active,
+        scraped_at
+      FROM adspy_ads
+      WHERE
+        ad_creative_body ILIKE $1 OR
+        hook_analysis ILIKE $1 OR
+        angle_analysis ILIKE $1 OR
+        structure_analysis ILIKE $1 OR
+        why_it_works ILIKE $1
+      ORDER BY scraped_at DESC
+      LIMIT $2
+    `, [`%${query}%`, limit]);
+
+    return result.rows;
+  } catch (error) {
+    console.error(`❌ Error searching ads with query "${query}":`, error);
+    throw error;
+  }
+}
+
+/**
+ * Get ad by ad_id
+ */
+export async function getAdById(adId: string): Promise<any | null> {
+  const db = getPool();
+
+  try {
+    const result = await db.query(`
+      SELECT * FROM adspy_ads WHERE ad_id = $1
+    `, [adId]);
+
+    if (result.rowCount > 0) {
+      return result.rows[0];
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`❌ Error getting ad ${adId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Get recent ads (for display/testing)
+ */
+export async function getRecentAds(limit: number = 20): Promise<any[]> {
+  const db = getPool();
+
+  try {
+    const result = await db.query(`
+      SELECT
+        id,
+        ad_id,
+        brand_name,
+        ad_creative_body,
+        ad_url,
+        image_url,
+        video_url,
+        is_active,
+        scraped_at
+      FROM adspy_ads
+      ORDER BY scraped_at DESC
+      LIMIT $1
+    `, [limit]);
+
+    return result.rows;
+  } catch (error) {
+    console.error(`❌ Error getting recent ads:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Get total ad count
+ */
+export async function getTotalAdCount(): Promise<number> {
+  const db = getPool();
+
+  try {
+    const result = await db.query('SELECT COUNT(*) FROM adspy_ads');
+    return parseInt(result.rows[0].count, 10);
+  } catch (error) {
+    console.error(`❌ Error getting total ad count:`, error);
+    return 0;
+  }
+}
+
+/**
+ * Get brand statistics
+ */
+export async function getBrandStats(brandId: number): Promise<any> {
+  const db = getPool();
+
+  try {
+    const result = await db.query(`
+      SELECT
+        b.id,
+        b.brand_name,
+        b.page_url,
+        b.active,
+        b.last_scraped_at,
+        b.total_ads_scraped,
+        COUNT(a.id) AS ads_in_db
+      FROM adspy_brands b
+      LEFT JOIN adspy_ads a ON a.brand_id = b.id
+      WHERE b.id = $1
+      GROUP BY b.id
+    `, [brandId]);
+
+    if (result.rowCount > 0) {
+      return result.rows[0];
+    }
+
+    return null;
+  } catch (error) {
+    console.error(`❌ Error getting brand stats for brand ${brandId}:`, error);
+    return null;
+  }
+}

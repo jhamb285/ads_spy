@@ -1,0 +1,18 @@
+[
+  {
+    "avatar": "Brand 1",
+    "brandName": "Brand 1",
+    "pageUrl": "https://www.facebook.com/brand1/"
+  },
+  {
+    "avatar": "Brand 2",
+    "brandName": "Brand 2",
+    "pageUrl": "https://www.facebook.com/brand2/"
+  },
+  {
+    "avatar": "Brand 3",
+    "brandName": "Brand 3",
+    "pageUrl": "https://www.facebook.com/brand3/"
+  }
+]
+
