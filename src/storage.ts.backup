@@ -1,0 +1,136 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Use process.cwd() to get the project root, works for both ts-node and compiled code
+const PROCESSED_ADS_FILE = path.join(process.cwd(), 'data', 'processed-ads.json');
+
+// Debounce timer for saving
+let saveTimer: NodeJS.Timeout | null = null;
+let pendingSave: Set<string> | null = null;
+const SAVE_DEBOUNCE_MS = 2000; // Save at most every 2 seconds
+
+/**
+ * Ensure the data directory exists
+ */
+function ensureDataDir(): void {
+  const dataDir = path.dirname(PROCESSED_ADS_FILE);
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+}
+
+/**
+ * Load processed ad IDs from file
+ */
+export function loadProcessedAdIds(): Set<string> {
+  ensureDataDir();
+  
+  if (!fs.existsSync(PROCESSED_ADS_FILE)) {
+    return new Set<string>();
+  }
+
+  try {
+    const data = fs.readFileSync(PROCESSED_ADS_FILE, 'utf-8');
+    const ids = JSON.parse(data) as string[];
+    return new Set(ids);
+  } catch (error) {
+    console.warn('⚠️  Failed to load processed ad IDs, starting fresh:', error);
+    return new Set<string>();
+  }
+}
+
+/**
+ * Save processed ad IDs to file (sync, for final saves)
+ */
+export function saveProcessedAdIds(ids: Set<string>): void {
+  ensureDataDir();
+  
+  // Clear any pending debounced save
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  pendingSave = null;
+  
+  try {
+    const idsArray = Array.from(ids);
+    fs.writeFileSync(PROCESSED_ADS_FILE, JSON.stringify(idsArray, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('❌ Failed to save processed ad IDs:', error);
+    throw error;
+  }
+}
+
+/**
+ * Save processed ad IDs to file (async, non-blocking)
+ */
+function saveProcessedAdIdsAsync(ids: Set<string>): void {
+  ensureDataDir();
+  
+  const idsArray = Array.from(ids);
+  fs.writeFile(PROCESSED_ADS_FILE, JSON.stringify(idsArray, null, 2), 'utf-8', (error) => {
+    if (error) {
+      console.error('❌ Failed to save processed ad IDs:', error);
+    }
+  });
+}
+
+/**
+ * Schedule a debounced save - saves after SAVE_DEBOUNCE_MS of no new adds
+ * This prevents excessive disk writes while ensuring data is saved regularly
+ */
+function scheduleSave(ids: Set<string>): void {
+  pendingSave = ids;
+  
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+  }
+  
+  saveTimer = setTimeout(() => {
+    if (pendingSave) {
+      saveProcessedAdIdsAsync(pendingSave);
+      pendingSave = null;
+    }
+    saveTimer = null;
+  }, SAVE_DEBOUNCE_MS);
+}
+
+/**
+ * Add a new processed ad ID - saves are debounced for efficiency
+ */
+export function addProcessedAdId(id: string, processedIds: Set<string>): void {
+  processedIds.add(id);
+  scheduleSave(processedIds);
+}
+
+/**
+ * Flush any pending saves immediately (call before exit)
+ */
+export function flushPendingSaves(): void {
+  if (pendingSave) {
+    saveProcessedAdIds(pendingSave);
+    pendingSave = null;
+  }
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+}
+
+// Ensure pending saves are flushed on process exit
+process.on('exit', () => {
+  flushPendingSaves();
+});
+
+process.on('SIGINT', () => {
+  console.log('\n📥 Saving processed ads before exit...');
+  flushPendingSaves();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n📥 Saving processed ads before exit...');
+  flushPendingSaves();
+  process.exit(0);
+});
+

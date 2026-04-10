@@ -1,0 +1,40 @@
+{
+  "competitors": [
+    {
+      "name": "Terminix",
+      "domain": "terminix.com",
+      "adTransparencyUrl": "https://adstransparency.google.com/?region=US&domain=terminix.com&preset-date=Last+30+days",
+      "isSubject": true
+    },
+    {
+      "name": "Barefoot Mosquito",
+      "domain": "barefootmosquito.com",
+      "adTransparencyUrl": "https://adstransparency.google.com/?region=US&domain=barefootmosquito.com&preset-date=Last+30+days",
+      "isSubject": false
+    },
+    {
+      "name": "Atex Pest",
+      "domain": "atexpest.com",
+      "adTransparencyUrl": "https://adstransparency.google.com/?region=US&domain=atexpest.com&preset-date=Last+30+days",
+      "isSubject": false
+    },
+    {
+      "name": "Houston Texas Rodent Removal",
+      "domain": "houstontexasrodentremoval.com",
+      "adTransparencyUrl": "https://adstransparency.google.com/?region=US&domain=houstontexasrodentremoval.com&preset-date=Last+30+days",
+      "isSubject": false
+    },
+    {
+      "name": "Stride Pest Control",
+      "domain": "stridepestcontrol.com",
+      "adTransparencyUrl": "https://adstransparency.google.com/?region=US&domain=stridepestcontrol.com&preset-date=Last+30+days",
+      "isSubject": false
+    },
+    {
+      "name": "Urban Jungle Wildlife Removal",
+      "domain": "urbanjunglewildliferemoval.com",
+      "adTransparencyUrl": "https://adstransparency.google.com/?region=US&domain=urbanjunglewildliferemoval.com&preset-date=Last+30+days",
+      "isSubject": false
+    }
+  ]
+}

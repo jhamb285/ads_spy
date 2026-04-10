@@ -1,0 +1,706 @@
+{
+  "name": "outreach-ads-competitor",
+  "nodes": [
+    {
+      "parameters": {
+        "description": "This tool needs to ask user if Area or city or country is missing from the context of the user. If any of these fields are missing, it needs to think and ask the user"
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolThink",
+      "typeVersion": 1.1,
+      "position": [
+        3312,
+        1292
+      ],
+      "id": "4480c8de-4114-4aba-96e3-fcc07f42e82c",
+      "name": "Think1"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        2832,
+        1068
+      ],
+      "id": "78e16e57-4af5-4d31-9753-98558b712b52",
+      "name": "When chat message received",
+      "webhookId": "8abdcb6b-c720-48a7-9135-f22df2b4c8f2"
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        3184,
+        1292
+      ],
+      "id": "6e38a00b-cae5-44d4-9be1-5df744219360",
+      "name": "Simple Memory2"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        3056,
+        1292
+      ],
+      "id": "b580b834-4b00-4c06-ab35-9ea93bec6abc",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "QVwd0fnDTLu3gKRs",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const businesses = $input.all().map(item => item.json);\n\n// Helper to group businesses into size tiers based on reviews\nfunction getSizeTier(reviewsCount) {\n  if (reviewsCount <= 50) return 'small';\n  if (reviewsCount <= 200) return 'medium';\n  return 'large';\n}\n\nconst competitorSets = [];\n\nfor (let i = 0; i < businesses.length; i++) {\n  const subject = businesses[i];\n  const subjectTier = getSizeTier(subject.reviewsCount);\n\n  // Find competitors: must be the same category AND similar size tier\n  let competitors = businesses.filter((b, idx) => {\n    if (idx === i) return false; // Skip self\n    const sameTier = getSizeTier(b.reviewsCount) === subjectTier;\n    const sameCategory = b.categoryName === subject.categoryName;\n    return sameTier && sameCategory;\n  });\n\n  // Fallback: If fewer than 2 competitors in the same tier, expand to just same category\n  if (competitors.length < 2) {\n    competitors = businesses.filter((b, idx) => {\n      if (idx === i) return false;\n      return b.categoryName === subject.categoryName;\n    });\n  }\n\n  // Take top 5 competitors (sorted by review count for relevance)\n  competitors = competitors\n    .sort((a, b) => b.reviewsCount - a.reviewsCount)\n    .slice(0, 5);\n\n  // Only create a set if we have at least 2 competitors for a valid MCP comparison\n  if (competitors.length >= 2) {\n    competitorSets.push({\n      subject: subject,\n      competitors: competitors,\n      setSize: competitors.length + 1\n    });\n  }\n}\n\nreturn competitorSets.map(set => ({ json: set }));"
+      },
+      "id": "7d256761-370b-4e65-87fe-1a32ea27ff54",
+      "name": "Create Competitor Sets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4640,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=You are an extraction assistant for a B2B lead generation workflow. \nExtract the core search parameters from the user's request.\n\nInput: {{$json.chatInput}}\n\nRules:\n1. Extract the specific 'businessType' (e.g., \"pest control\", \"roofing\", \"HVAC\").\n2. Extract the 'location' as a specific string (City, State/Country - e.g., \"Austin, TX\" or \"London, UK\"). Do not use radius.\n3. Determine 'maxResults' (default to 50 if the user does not specify a number).\n\nReturn ONLY valid JSON in this exact format:\n{\n  \"bussinessType\": \"extracted business type\",\n  \"location\": \"extracted location\",\n  \"maxResults\": 10\n}\n\nDo not include any explanation, markdown formatting, or text outside the JSON object."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        3112,
+        1068
+      ],
+      "id": "a86fec7b-d441-442d-a2b5-c02d436f4ec5",
+      "name": "AI Extraction"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  let raw = item.json.output;\n\n  // Remove markdown code fences (```json ... ```)\n  let cleaned = raw\n    .replace(/```json\\s*/i, '')  // remove opening ```json\n    .replace(/```$/, '')         // remove closing ```\n    .trim();\n\n  // Convert string to JSON\n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (err) {\n    throw new Error(\"Invalid JSON format: \" + err.message);\n  }\n\n  return {\n    json: parsed\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        1068
+      ],
+      "id": "931c5305-12d0-4254-bac0-50f1f80ba940",
+      "name": "JSON"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://malachi-shedlike-hana.ngrok-free.dev/api/analyze-competitor-set",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \n  \"competitors\": [\n    { \"name\": \"Nike\",         \"domain\": \"https://www.facebook.com/nike\",        \"isSubject\": true  },\n    { \"name\": \"Adidas\",       \"domain\": \"https://www.facebook.com/adidas\",      \"isSubject\": false },\n    { \"name\": \"Puma\",         \"domain\": \"https://www.facebook.com/PUMA\",        \"isSubject\": false },\n    { \"name\": \"Under Armour\", \"domain\": \"https://www.facebook.com/underarmour\", \"isSubject\": false }\n  ]\n}\n",
+        "options": {}
+      },
+      "id": "23dba440-f7d4-43ef-840d-6fb805474719",
+      "name": "Call AdSpy AI Engine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        5088,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "Run actor and get dataset",
+        "actorSource": "store",
+        "actorId": {
+          "__rl": true,
+          "value": "H2ZIBUsxwkvDbXzqG",
+          "mode": "list",
+          "cachedResultName": "Social Media Finder (tri_angle/social-media-finder)",
+          "cachedResultUrl": "https://console.apify.com/actors/H2ZIBUsxwkvDbXzqG/input"
+        },
+        "customBody": "={\n    \"profileNames\": [\n        \"{{ $json.title }}\"\n    ],\n    \"socials\": [\n        \"facebook\"\n    ]\n}",
+        "timeout": {}
+      },
+      "type": "@apify/n8n-nodes-apify.apify",
+      "typeVersion": 1,
+      "position": [
+        3968,
+        1068
+      ],
+      "id": "ef31838f-b564-41c3-b820-1ff83ff0d30c",
+      "name": "Finding Facebook",
+      "credentials": {
+        "apifyApi": {
+          "id": "5fRm1QZCDvOcqGRH",
+          "name": "Apify account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "78d52971-e439-4132-a12a-868933c56e92",
+              "name": "inputProfileName",
+              "value": "={{ $json.inputProfileName }}",
+              "type": "string"
+            },
+            {
+              "id": "ab2b07cf-948b-48ba-80d4-b2f36f57980c",
+              "name": "social",
+              "value": "={{ $json.social }}",
+              "type": "string"
+            },
+            {
+              "id": "7dab24d5-7fb0-4e59-afbe-bfa8f81d1926",
+              "name": "socialProfileUrl",
+              "value": "={{ $json.socialProfileUrl }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4192,
+        1068
+      ],
+      "id": "0995bd7c-2ac5-4440-be1a-b6cb213954cf",
+      "name": "Data Binding"
+    },
+    {
+      "parameters": {
+        "jsCode": "const competitorSet = $input.item.json;\nconst allBusinesses = [competitorSet.subject, ...competitorSet.competitors];\n\nfunction extractFacebookUrl(business) {\n  // 1. Try Apify's enriched 'facebooks' array\n  if (business.facebooks && Array.isArray(business.facebooks) && business.facebooks.length > 0) {\n    return business.facebooks[0];\n  }\n  \n  // 2. Aggressive Regex: Look for ANY facebook.com link anywhere in the business object\n  const stringified = JSON.stringify(business);\n  const fbMatch = stringified.match(/https?:\\/\\/(www\\.)?facebook\\.com\\/[a-zA-Z0-9\\.\\-]+/);\n  if (fbMatch) return fbMatch[0];\n\n  // 3. Fallback: Generate a synthetic FB link from the website domain so AdSpy doesn't crash\n  // e.g., https://pestcontrol.com -> https://facebook.com/pestcontrol\n  if (business.website && typeof business.website === 'string' && !business.website.includes('google.com')) {\n      try {\n          const urlObj = new URL(business.website);\n          let domainName = urlObj.hostname.replace('www.', '').split('.')[0];\n          return `https://facebook.com/${domainName}`;\n      } catch(e) {}\n  }\n\n  return null;\n}\n\nconst payloadCompetitors = allBusinesses.map((b, index) => {\n  return {\n    name: b.inputProfileName || b.title || \"Unknown Business\",\n    domain: extractFacebookUrl(b) || \"no-fb-found\",\n    isSubject: index === 0\n  };\n}).filter(c => c.domain !== \"no-fb-found\");\n\nconst subject = payloadCompetitors.find(c => c.isSubject);\nconst competitors = payloadCompetitors.filter(c => !c.isSubject);\n\n// If we STILL don't have enough data, output a visible error object instead of failing silently\nif (!subject || competitors.length < 2) {\n  return {\n      json: {\n          status: \"error\",\n          reason: \"Not enough valid Facebook URLs found\",\n          foundSubject: !!subject,\n          competitorCount: competitors.length\n      }\n  };\n}\n\nreturn {\n  json: {\n    status: \"success\",\n    competitors: [subject, ...competitors.slice(0, 5)]\n  }\n};"
+      },
+      "id": "8cde11ac-3e58-4584-9f49-ed51c2b81841",
+      "name": "Build API Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4864,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/compass~crawler-google-places/run-sync-get-dataset-items?token=YOUR_APIFY_API_KEY",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n    \"includeWebResults\": true,\n    \"language\": \"en\",\n    \"locationQuery\": \"{{ $json.location }}\",\n    \"maxCrawledPlacesPerSearch\": 10,\n    \"maxImages\": 0,\n    \"maximumLeadsEnrichmentRecords\": 0,\n    \"scrapeContacts\": true,\n    \"scrapeDirectories\": false,\n    \"scrapeImageAuthors\": false,\n    \"scrapePlaceDetailPage\": false,\n    \"scrapeReviewsPersonalData\": true,\n    \"scrapeSocialMediaProfiles\": {\n        \"facebooks\": true\n    },\n    \"scrapeTableReservationProvider\": false,\n    \"searchStringsArray\": [\n        \"{{ $json.bussinessType }}\"\n    ],\n    \"skipClosedPlaces\": true\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3744,
+        1068
+      ],
+      "id": "5c65234a-edbf-4bff-b37f-3f6b67618a15",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.item.json;\n\n// Handle failed analyses gracefully\nif (!response || response.success === false) {\n  return {\n    json: {\n      status: 'failed',\n      subjectName: response?.subject?.name || 'Unknown',\n      error: response?.error || 'Analysis failed or no ads found',\n      timestamp: new Date().toISOString()\n    }\n  };\n}\n\n// Flatten the \"Trojan Horse\" insights for CRM / Cold Outreach\nreturn {\n  json: {\n    status: 'success',\n    analysis_id: response.analysis_id,\n    subjectName: response.subject?.name || 'Unknown',\n    subjectAdsCount: response.subject?.ad_count || 0,\n    missingHooks: (response.gaps?.missing_hooks || []).join(', ') || 'N/A',\n    underutilizedFormats: (response.gaps?.underutilized_formats || []).join(', ') || 'N/A',\n    topRecommendationAction: response.recommendations?.[0]?.action || \"\",\n    topRecommendationExample: response.recommendations?.[0]?.example || \"\",\n    topRecommendationImplementation: response.recommendations?.[0]?.implementation || \"\",\n    dominantMarketHook: response.market_insights?.dominant_hook_type || \"N/A\",\n    competitorsAnalyzed: (response.competitors || []).map(c => c.name).join(', '),\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "13f0503f-5df1-4f46-a564-6b7bc542937e",
+      "name": "Process Analysis Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5312,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const allAnalyses = $input.all().map(item => item.json);\n\n// Separate successes from failures\nconst successful = allAnalyses.filter(a => a.status === 'success');\nconst failed = allAnalyses.filter(a => a.status === 'failed');\n\nreturn {\n  json: {\n    workflow_summary: {\n      totalProcessed: allAnalyses.length,\n      successfulAnalyses: successful.length,\n      failedAnalyses: failed.length\n    },\n    readyForOutreach: successful,\n    failedRecords: failed\n  }\n};"
+      },
+      "id": "ce5ef691-dbee-4fcd-bf2f-87142be5f502",
+      "name": "Aggregate Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5536,
+        944
+      ],
+      "notesInFlow": true,
+      "notes": "Attach to the \"Done\" branch of the Loop"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "readyForOutreach",
+        "options": {}
+      },
+      "id": "5c043c96-7a7c-466c-a754-8cad0ddcbb04",
+      "name": "Split Out Successful Analyses",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 3,
+      "position": [
+        5760,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "actorSource": "store",
+        "actorId": {
+          "__rl": true,
+          "value": "https://console.apify.com/actors/IoSHqwTR9YGhzccez/",
+          "mode": "url"
+        },
+        "customBody": "={\n    \"company_domain\": [\n        \"https://nike.com\"\n    ],\n    \"email_status\": [\n        \"validated\"\n    ]\n}"
+      },
+      "type": "@apify/n8n-nodes-apify.apify",
+      "typeVersion": 1,
+      "position": [
+        5984,
+        944
+      ],
+      "id": "4d7b982f-aa73-4e2a-a8ca-a9f362109062",
+      "name": "Lead Enrichment",
+      "credentials": {
+        "apifyApi": {
+          "id": "5fRm1QZCDvOcqGRH",
+          "name": "Apify account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        7024,
+        1068
+      ],
+      "id": "c69215a1-3612-47c6-8a73-f05816dd4a88",
+      "name": "Send email",
+      "webhookId": "1978adaa-1e24-4bc3-9fe5-ae515d42d583"
+    },
+    {
+      "parameters": {
+        "batchSize": 6,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        4416,
+        1068
+      ],
+      "id": "50c9e987-aa63-48c3-8926-d29feb51c673",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        6432,
+        1168
+      ],
+      "id": "73dc7283-58c9-4574-bb22-d0b2c74a9c69",
+      "name": "Google Gemini Chat Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "QVwd0fnDTLu3gKRs",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        6560,
+        1168
+      ],
+      "id": "21c1bfce-b57c-4394-b6de-e33f96101cad",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.toolThink",
+      "typeVersion": 1.1,
+      "position": [
+        6688,
+        1168
+      ],
+      "id": "1ad54f90-4d48-48d3-b6d5-dfd6c243e452",
+      "name": "Think"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_SPREADSHEET_ID_HERE",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Title": "={{ $node[\"Lead Enrichment\"].json.title }}",
+            "Name": "={{ $node[\"Lead Enrichment\"].json.name }}",
+            "Email": "={{ $node[\"Lead Enrichment\"].json.email }}",
+            "PersonalLinkedIn": "={{ $node[\"Lead Enrichment\"].json.linkedin_url }}",
+            "CompanyName": "={{ $node[\"Lead Enrichment\"].json.organization.name }}",
+            "CompanyLinkedIn": "={{ $node[\"Lead Enrichment\"].json.organization.linkedin_url }}",
+            "CompanyAdsCount": "={{ $node[\"Split Out Successful Analyses\"].json.subjectAdsCount }}",
+            "TopRecommendationAction": "={{ $node[\"Split Out Successful Analyses\"].json.topRecommendationAction }}",
+            "TopRecommendationExample": "={{ $node[\"Split Out Successful Analyses\"].json.topRecommendationExample }}",
+            "TopRecommendationImplementation": "={{ $node[\"Split Out Successful Analyses\"].json.topRecommendationImplementation }}",
+            "DominantMarketHook": "={{ $node[\"Split Out Successful Analyses\"].json.dominantMarketHook }}",
+            "MissingHooks": "={{ $node[\"Split Out Successful Analyses\"].json.missingHooks }}",
+            "UnderutilizedFormats": "={{ $node[\"Split Out Successful Analyses\"].json.underutilizedFormats }}",
+            "CompetitorsAnalyzed": "={{ $node[\"Split Out Successful Analyses\"].json.competitorsAnalyzed }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "689ed7a2-62d1-4b6b-810e-0567ffb70ace",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.3,
+      "position": [
+        6208,
+        944
+      ],
+      "notesInFlow": true,
+      "notes": "Select your Document ID and Sheet Name"
+    },
+    {
+      "parameters": {
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=You are an expert B2B Sales Development Representative reaching out to {{$json.Name}} at {{$json.CompanyName}}.\n\nWrite a 4-sentence cold email.\nDo NOT pitch an AI service. Instead, offer them a FREE competitive ad analysis report that we just ran.\n\nUse the following insights to prove we did the work:\n1. We analyzed their Meta ads against their top local competitors: {{$json.CompetitorsAnalyzed}}.\n2. Point out that the market is dominating with \"{{$json.DominantMarketHook}}\" hooks.\n3. Mention they have a gap and should {{$json.TopRecommendationAction}} (For example: {{$json.TopRecommendationExample}}).\n\nEnd with a soft CTA asking if they want the full PDF report sent over.\n\nReturn ONLY the exact text of the email body. Do not include subject lines, placeholders, markdown formatting, or conversational filler."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        6552,
+        944
+      ],
+      "id": "845f8d24-2967-4fdc-a385-434a8ffedc95",
+      "name": "AI Email Writer1"
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        6816,
+        1168
+      ],
+      "id": "9d8a8255-e32e-4445-8a50-df7b7d573b13",
+      "name": "Structured Output Parser"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Think1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Extraction",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory2": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Extraction",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Extraction",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Competitor Sets": {
+      "main": [
+        [
+          {
+            "node": "Build API Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Extraction": {
+      "main": [
+        [
+          {
+            "node": "JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JSON": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finding Facebook": {
+      "main": [
+        [
+          {
+            "node": "Data Binding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Binding": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Finding Facebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build API Payload": {
+      "main": [
+        [
+          {
+            "node": "Call AdSpy AI Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call AdSpy AI Engine": {
+      "main": [
+        [
+          {
+            "node": "Process Analysis Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Analysis Results": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out Successful Analyses": {
+      "main": [
+        [
+          {
+            "node": "Lead Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Summary": {
+      "main": [
+        [
+          {
+            "node": "Split Out Successful Analyses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Create Competitor Sets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Email Writer1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Email Writer1",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Think": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Email Writer1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "AI Email Writer1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Email Writer1": {
+      "main": [
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Email Writer1",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send email": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": 720
+  },
+  "versionId": "150a6713-5db4-4594-a059-68004e1e786a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a0855a4a4512786ef768e7fc0c1e27ce926351d9433f3bf32740e4f59c877b59"
+  },
+  "id": "hNacYUtW1B6aKsKe",
+  "tags": []
+}
