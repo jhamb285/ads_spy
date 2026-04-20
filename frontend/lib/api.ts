@@ -1,7 +1,7 @@
-import { Brand, Ad } from './types'
+import { Brand, Ad, OutreachCampaign, OutreachLead, OutreachContact } from './types'
 
 // Re-export types for convenience
-export type { Brand, Ad } from './types'
+export type { Brand, Ad, OutreachCampaign, OutreachLead, OutreachContact } from './types'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:1002'
 
@@ -128,4 +128,78 @@ export function getProxiedImageUrl(url: string | null | undefined): string {
   // Don't proxy local/relative URLs
   if (url.startsWith('/') || url.startsWith('data:')) return url
   return `${API_BASE_URL}/api/images/proxy?url=${encodeURIComponent(url)}`
+}
+
+// Outreach Pipeline API
+export async function createCampaign(data: {
+  name?: string
+  industry: string
+  city: string
+  max_places?: number
+}): Promise<OutreachCampaign> {
+  return fetchAPI('/api/outreach/campaigns', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getCampaigns(): Promise<OutreachCampaign[]> {
+  return fetchAPI('/api/outreach/campaigns')
+}
+
+export async function getCampaign(id: number): Promise<OutreachCampaign> {
+  return fetchAPI(`/api/outreach/campaigns/${id}`)
+}
+
+export async function getCampaignLeads(
+  id: number,
+  params?: { status?: string; page?: number; limit?: number }
+): Promise<{ leads: OutreachLead[]; total: number }> {
+  const query = new URLSearchParams()
+  if (params?.status) query.set('status', params.status)
+  if (params?.page) query.set('page', String(params.page))
+  if (params?.limit) query.set('limit', String(params.limit))
+  const qs = query.toString()
+  return fetchAPI(`/api/outreach/campaigns/${id}/leads${qs ? `?${qs}` : ''}`)
+}
+
+export async function updateOutreachLead(
+  id: number,
+  data: Partial<{ fb_ads_url: string; google_ads_url: string; fb_page_url: string }>
+): Promise<OutreachLead> {
+  return fetchAPI(`/api/outreach/leads/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function discoverSocials(campaignId: number): Promise<{ id: number; status: string }> {
+  return fetchAPI(`/api/outreach/campaigns/${campaignId}/discover-socials`, {
+    method: 'POST',
+  })
+}
+
+export async function analyzeCampaign(campaignId: number): Promise<{ id: number; status: string }> {
+  return fetchAPI(`/api/outreach/campaigns/${campaignId}/analyze`, {
+    method: 'POST',
+  })
+}
+
+export async function enrichCampaign(campaignId: number): Promise<{ id: number; status: string }> {
+  return fetchAPI(`/api/outreach/campaigns/${campaignId}/enrich`, {
+    method: 'POST',
+  })
+}
+
+export async function getCampaignContacts(
+  campaignId: number,
+  params?: { lead_id?: number; seniority?: string; page?: number; limit?: number }
+): Promise<{ contacts: OutreachContact[]; total: number }> {
+  const query = new URLSearchParams()
+  if (params?.lead_id) query.set('lead_id', String(params.lead_id))
+  if (params?.seniority) query.set('seniority', params.seniority)
+  if (params?.page) query.set('page', String(params.page))
+  if (params?.limit) query.set('limit', String(params.limit))
+  const qs = query.toString()
+  return fetchAPI(`/api/outreach/campaigns/${campaignId}/contacts${qs ? `?${qs}` : ''}`)
 }

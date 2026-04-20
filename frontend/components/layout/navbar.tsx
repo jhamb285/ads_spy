@@ -22,6 +22,7 @@ const navItems = [
   { name: 'Dashboard', href: '/dashboard' },
   { name: 'Brands', href: '/brands' },
   { name: 'Search', href: '/search' },
+  { name: 'Outreach', href: '/outreach' },
   { name: 'Settings', href: '/settings' },
   { name: 'Guide', href: '/docs' },
 ]

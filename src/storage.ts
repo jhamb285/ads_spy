@@ -1415,3 +1415,354 @@ export async function getRecentCompetitorAnalyses(limit: number = 20): Promise<a
     return [];
   }
 }
+
+// ============================================================
+// OUTREACH PIPELINE - Campaigns, Leads, Contacts
+// ============================================================
+
+export interface OutreachCampaign {
+  id: number;
+  name: string | null;
+  industry: string;
+  city: string;
+  max_places: number;
+  status: string;
+  error_message: string | null;
+  total_leads: number;
+  total_with_fb: number;
+  total_analyzed: number;
+  total_contacts: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OutreachLead {
+  id: number;
+  campaign_id: number;
+  place_id: string | null;
+  name: string;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  rating: number | null;
+  reviews_count: number;
+  category_name: string | null;
+  fb_page_url: string | null;
+  fb_ads_url: string | null;
+  google_ads_url: string | null;
+  analysis_id: string | null;
+  status: string;
+  raw_data: any;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OutreachContact {
+  id: number;
+  lead_id: number;
+  campaign_id: number;
+  full_name: string | null;
+  email: string | null;
+  title: string | null;
+  seniority: string | null;
+  linkedin_url: string | null;
+  company_name: string | null;
+  company_linkedin_url: string | null;
+  email_status: string;
+  raw_data: any;
+  created_at: string;
+}
+
+export async function createCampaign(data: {
+  name?: string;
+  industry: string;
+  city: string;
+  max_places?: number;
+}): Promise<OutreachCampaign> {
+  const db = getPool();
+  const result = await db.query(
+    `INSERT INTO outreach_campaigns (name, industry, city, max_places)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [data.name || `${data.industry} - ${data.city}`, data.industry, data.city, data.max_places || 50]
+  );
+  return result.rows[0];
+}
+
+export async function getCampaigns(): Promise<OutreachCampaign[]> {
+  const db = getPool();
+  const result = await db.query(
+    `SELECT * FROM outreach_campaigns ORDER BY created_at DESC`
+  );
+  return result.rows;
+}
+
+export async function getCampaignById(id: number): Promise<OutreachCampaign | null> {
+  const db = getPool();
+  const result = await db.query(
+    `SELECT * FROM outreach_campaigns WHERE id = $1`,
+    [id]
+  );
+  return result.rows[0] || null;
+}
+
+export async function updateCampaignStatus(
+  id: number,
+  status: string,
+  errorMessage?: string
+): Promise<void> {
+  const db = getPool();
+  await db.query(
+    `UPDATE outreach_campaigns SET status = $1, error_message = $2 WHERE id = $3`,
+    [status, errorMessage || null, id]
+  );
+}
+
+export async function updateCampaignCounts(id: number): Promise<void> {
+  const db = getPool();
+  await db.query(`
+    UPDATE outreach_campaigns SET
+      total_leads = (SELECT COUNT(*) FROM outreach_leads WHERE campaign_id = $1),
+      total_with_fb = (SELECT COUNT(*) FROM outreach_leads WHERE campaign_id = $1 AND fb_page_url IS NOT NULL),
+      total_analyzed = (SELECT COUNT(*) FROM outreach_leads WHERE campaign_id = $1 AND analysis_id IS NOT NULL),
+      total_contacts = (SELECT COUNT(*) FROM outreach_contacts WHERE campaign_id = $1)
+    WHERE id = $1
+  `, [id]);
+}
+
+export async function createLeads(
+  campaignId: number,
+  leads: Array<{
+    place_id?: string;
+    name: string;
+    address?: string;
+    phone?: string;
+    website?: string;
+    rating?: number;
+    reviews_count?: number;
+    category_name?: string;
+    fb_page_url?: string;
+    raw_data?: any;
+  }>
+): Promise<OutreachLead[]> {
+  const db = getPool();
+  const results: OutreachLead[] = [];
+
+  for (const lead of leads) {
+    const result = await db.query(
+      `INSERT INTO outreach_leads
+        (campaign_id, place_id, name, address, phone, website, rating, reviews_count, category_name, fb_page_url, raw_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [
+        campaignId,
+        lead.place_id || null,
+        lead.name,
+        lead.address || null,
+        lead.phone || null,
+        lead.website || null,
+        lead.rating || null,
+        lead.reviews_count || 0,
+        lead.category_name || null,
+        lead.fb_page_url || null,
+        lead.raw_data ? JSON.stringify(lead.raw_data) : null,
+      ]
+    );
+    results.push(result.rows[0]);
+  }
+
+  return results;
+}
+
+export async function getLeadsByCampaign(
+  campaignId: number,
+  filters?: { status?: string; page?: number; limit?: number }
+): Promise<{ leads: OutreachLead[]; total: number }> {
+  const db = getPool();
+  const page = filters?.page || 1;
+  const limit = filters?.limit || 50;
+  const offset = (page - 1) * limit;
+
+  const conditions: string[] = ['campaign_id = $1'];
+  const params: any[] = [campaignId];
+  let paramCount = 1;
+
+  if (filters?.status) {
+    paramCount++;
+    params.push(filters.status);
+    conditions.push(`status = $${paramCount}`);
+  }
+
+  const where = conditions.join(' AND ');
+
+  const countResult = await db.query(
+    `SELECT COUNT(*) FROM outreach_leads WHERE ${where}`,
+    params
+  );
+
+  params.push(limit, offset);
+  const result = await db.query(
+    `SELECT * FROM outreach_leads WHERE ${where} ORDER BY id ASC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`,
+    params
+  );
+
+  return { leads: result.rows, total: parseInt(countResult.rows[0].count) };
+}
+
+export async function updateLead(
+  id: number,
+  data: Partial<Pick<OutreachLead, 'fb_ads_url' | 'google_ads_url' | 'fb_page_url' | 'status' | 'analysis_id'>>
+): Promise<OutreachLead> {
+  const db = getPool();
+  const setClauses: string[] = [];
+  const params: any[] = [];
+  let paramCount = 0;
+
+  if (data.fb_ads_url !== undefined) {
+    paramCount++;
+    params.push(data.fb_ads_url);
+    setClauses.push(`fb_ads_url = $${paramCount}`);
+  }
+  if (data.google_ads_url !== undefined) {
+    paramCount++;
+    params.push(data.google_ads_url);
+    setClauses.push(`google_ads_url = $${paramCount}`);
+  }
+  if (data.fb_page_url !== undefined) {
+    paramCount++;
+    params.push(data.fb_page_url);
+    setClauses.push(`fb_page_url = $${paramCount}`);
+  }
+  if (data.status !== undefined) {
+    paramCount++;
+    params.push(data.status);
+    setClauses.push(`status = $${paramCount}`);
+  }
+  if (data.analysis_id !== undefined) {
+    paramCount++;
+    params.push(data.analysis_id);
+    setClauses.push(`analysis_id = $${paramCount}`);
+  }
+
+  if (setClauses.length === 0) {
+    throw new Error('No fields to update');
+  }
+
+  paramCount++;
+  params.push(id);
+
+  const result = await db.query(
+    `UPDATE outreach_leads SET ${setClauses.join(', ')} WHERE id = $${paramCount} RETURNING *`,
+    params
+  );
+
+  if ((result.rowCount ?? 0) === 0) {
+    throw new Error(`Lead ${id} not found`);
+  }
+
+  return result.rows[0];
+}
+
+export async function getLeadsForAnalysis(campaignId: number): Promise<OutreachLead[]> {
+  const db = getPool();
+  const result = await db.query(
+    `SELECT * FROM outreach_leads
+     WHERE campaign_id = $1
+       AND (fb_page_url IS NOT NULL OR fb_ads_url IS NOT NULL)
+       AND analysis_id IS NULL
+     ORDER BY id ASC`,
+    [campaignId]
+  );
+  return result.rows;
+}
+
+export async function getAllLeadsByCampaign(campaignId: number): Promise<OutreachLead[]> {
+  const db = getPool();
+  const result = await db.query(
+    `SELECT * FROM outreach_leads WHERE campaign_id = $1 ORDER BY id ASC`,
+    [campaignId]
+  );
+  return result.rows;
+}
+
+export async function createContacts(
+  leadId: number,
+  campaignId: number,
+  contacts: Array<{
+    full_name?: string;
+    email?: string;
+    title?: string;
+    seniority?: string;
+    linkedin_url?: string;
+    company_name?: string;
+    company_linkedin_url?: string;
+    email_status?: string;
+    raw_data?: any;
+  }>
+): Promise<void> {
+  const db = getPool();
+
+  for (const contact of contacts) {
+    await db.query(
+      `INSERT INTO outreach_contacts
+        (lead_id, campaign_id, full_name, email, title, seniority, linkedin_url, company_name, company_linkedin_url, email_status, raw_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        leadId,
+        campaignId,
+        contact.full_name || null,
+        contact.email || null,
+        contact.title || null,
+        contact.seniority || null,
+        contact.linkedin_url || null,
+        contact.company_name || null,
+        contact.company_linkedin_url || null,
+        contact.email_status || 'found',
+        contact.raw_data ? JSON.stringify(contact.raw_data) : null,
+      ]
+    );
+  }
+}
+
+export async function getContactsByCampaign(
+  campaignId: number,
+  filters?: { leadId?: number; seniority?: string; page?: number; limit?: number }
+): Promise<{ contacts: OutreachContact[]; total: number }> {
+  const db = getPool();
+  const page = filters?.page || 1;
+  const limit = filters?.limit || 50;
+  const offset = (page - 1) * limit;
+
+  const conditions: string[] = ['c.campaign_id = $1'];
+  const params: any[] = [campaignId];
+  let paramCount = 1;
+
+  if (filters?.leadId) {
+    paramCount++;
+    params.push(filters.leadId);
+    conditions.push(`c.lead_id = $${paramCount}`);
+  }
+  if (filters?.seniority) {
+    paramCount++;
+    params.push(filters.seniority);
+    conditions.push(`c.seniority = $${paramCount}`);
+  }
+
+  const where = conditions.join(' AND ');
+
+  const countResult = await db.query(
+    `SELECT COUNT(*) FROM outreach_contacts c WHERE ${where}`,
+    params
+  );
+
+  params.push(limit, offset);
+  const result = await db.query(
+    `SELECT c.*, l.name as lead_name
+     FROM outreach_contacts c
+     LEFT JOIN outreach_leads l ON c.lead_id = l.id
+     WHERE ${where}
+     ORDER BY c.id ASC
+     LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`,
+    params
+  );
+
+  return { contacts: result.rows, total: parseInt(countResult.rows[0].count) };
+}

@@ -936,6 +936,189 @@ app.get('/api/competitor-analyses', async (req: Request, res: Response) => {
 
 /**
  * =====================================================================
+ * OUTREACH PIPELINE ENDPOINTS
+ * =====================================================================
+ */
+
+import {
+  createCampaign,
+  getCampaigns,
+  getCampaignById,
+  getLeadsByCampaign,
+  updateLead as updateLeadDb,
+  getContactsByCampaign,
+  updateCampaignStatus as updateCampaignStatusDb,
+} from './storage';
+import {
+  scrapeGooglePlaces,
+  discoverSocialMedia,
+  runCompetitiveAnalysis,
+  enrichLeads,
+} from './services/outreach';
+
+app.post('/api/outreach/campaigns', async (req: Request, res: Response) => {
+  try {
+    const { name, industry, city, max_places } = req.body;
+
+    if (!industry || !city) {
+      return res.status(400).json({ error: 'industry and city are required' });
+    }
+
+    const maxPlaces = Math.min(parseInt(max_places) || 50, 500);
+    const campaign = await createCampaign({ name, industry, city, max_places: maxPlaces });
+
+    scrapeGooglePlaces(campaign.id, industry, city, maxPlaces).catch(err => {
+      console.error(`Scrape failed for campaign ${campaign.id}:`, err);
+    });
+
+    res.status(201).json({ ...campaign, status: 'scraping' });
+  } catch (error) {
+    console.error('Error creating campaign:', error);
+    res.status(500).json({ error: 'Failed to create campaign' });
+  }
+});
+
+app.get('/api/outreach/campaigns', async (req: Request, res: Response) => {
+  try {
+    const campaigns = await getCampaigns();
+    res.json(campaigns);
+  } catch (error) {
+    console.error('Error fetching campaigns:', error);
+    res.status(500).json({ error: 'Failed to fetch campaigns' });
+  }
+});
+
+app.get('/api/outreach/campaigns/:id', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid campaign ID' });
+
+    const campaign = await getCampaignById(id);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    res.json(campaign);
+  } catch (error) {
+    console.error('Error fetching campaign:', error);
+    res.status(500).json({ error: 'Failed to fetch campaign' });
+  }
+});
+
+app.get('/api/outreach/campaigns/:id/leads', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid campaign ID' });
+
+    const result = await getLeadsByCampaign(id, {
+      status: req.query.status as string,
+      page: parseInt(req.query.page as string) || 1,
+      limit: parseInt(req.query.limit as string) || 50,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching leads:', error);
+    res.status(500).json({ error: 'Failed to fetch leads' });
+  }
+});
+
+app.patch('/api/outreach/leads/:id', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid lead ID' });
+
+    const { fb_ads_url, google_ads_url, fb_page_url } = req.body;
+    const lead = await updateLeadDb(id, { fb_ads_url, google_ads_url, fb_page_url });
+    res.json(lead);
+  } catch (error: any) {
+    console.error('Error updating lead:', error);
+    if (error.message?.includes('not found')) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+    res.status(500).json({ error: 'Failed to update lead' });
+  }
+});
+
+app.post('/api/outreach/campaigns/:id/discover-socials', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid campaign ID' });
+
+    const campaign = await getCampaignById(id);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    await updateCampaignStatusDb(id, 'discovering_socials');
+    discoverSocialMedia(id).catch(err => {
+      console.error(`Social discovery failed for campaign ${id}:`, err);
+    });
+
+    res.json({ id, status: 'discovering_socials' });
+  } catch (error) {
+    console.error('Error starting social discovery:', error);
+    res.status(500).json({ error: 'Failed to start social discovery' });
+  }
+});
+
+app.post('/api/outreach/campaigns/:id/analyze', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid campaign ID' });
+
+    const campaign = await getCampaignById(id);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    await updateCampaignStatusDb(id, 'analyzing');
+    runCompetitiveAnalysis(id).catch(err => {
+      console.error(`Analysis failed for campaign ${id}:`, err);
+    });
+
+    res.json({ id, status: 'analyzing' });
+  } catch (error) {
+    console.error('Error starting analysis:', error);
+    res.status(500).json({ error: 'Failed to start analysis' });
+  }
+});
+
+app.post('/api/outreach/campaigns/:id/enrich', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid campaign ID' });
+
+    const campaign = await getCampaignById(id);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    await updateCampaignStatusDb(id, 'enriching');
+    enrichLeads(id).catch(err => {
+      console.error(`Enrichment failed for campaign ${id}:`, err);
+    });
+
+    res.json({ id, status: 'enriching' });
+  } catch (error) {
+    console.error('Error starting enrichment:', error);
+    res.status(500).json({ error: 'Failed to start enrichment' });
+  }
+});
+
+app.get('/api/outreach/campaigns/:id/contacts', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'Invalid campaign ID' });
+
+    const result = await getContactsByCampaign(id, {
+      leadId: req.query.lead_id ? parseInt(req.query.lead_id as string) : undefined,
+      seniority: req.query.seniority as string,
+      page: parseInt(req.query.page as string) || 1,
+      limit: parseInt(req.query.limit as string) || 50,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching contacts:', error);
+    res.status(500).json({ error: 'Failed to fetch contacts' });
+  }
+});
+
+/**
+ * =====================================================================
  * IMAGE PROXY / CACHE ENDPOINT
  * Facebook CDN URLs expire — this endpoint fetches and caches images
  * locally so they remain accessible permanently.
@@ -1067,6 +1250,17 @@ async function startServer() {
       console.log(`   POST /api/analyze-competitor-set`);
       console.log(`   GET /api/competitor-analyses/:id`);
       console.log(`   GET /api/competitor-analyses`);
+      console.log('');
+      console.log(`📧 Outreach Pipeline:`);
+      console.log(`   POST /api/outreach/campaigns`);
+      console.log(`   GET  /api/outreach/campaigns`);
+      console.log(`   GET  /api/outreach/campaigns/:id`);
+      console.log(`   GET  /api/outreach/campaigns/:id/leads`);
+      console.log(`   PATCH /api/outreach/leads/:id`);
+      console.log(`   POST /api/outreach/campaigns/:id/discover-socials`);
+      console.log(`   POST /api/outreach/campaigns/:id/analyze`);
+      console.log(`   POST /api/outreach/campaigns/:id/enrich`);
+      console.log(`   GET  /api/outreach/campaigns/:id/contacts`);
       console.log('');
     });
   } catch (error) {

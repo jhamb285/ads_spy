@@ -43,3 +43,57 @@ export interface Ad {
   analyzed_at: string | null
   created_at: string
 }
+
+export interface OutreachCampaign {
+  id: number
+  name: string | null
+  industry: string
+  city: string
+  max_places: number
+  status: string
+  error_message: string | null
+  total_leads: number
+  total_with_fb: number
+  total_analyzed: number
+  total_contacts: number
+  created_at: string
+  updated_at: string
+}
+
+export interface OutreachLead {
+  id: number
+  campaign_id: number
+  place_id: string | null
+  name: string
+  address: string | null
+  phone: string | null
+  website: string | null
+  rating: number | null
+  reviews_count: number
+  category_name: string | null
+  fb_page_url: string | null
+  fb_ads_url: string | null
+  google_ads_url: string | null
+  analysis_id: string | null
+  status: string
+  raw_data: any
+  created_at: string
+  updated_at: string
+}
+
+export interface OutreachContact {
+  id: number
+  lead_id: number
+  campaign_id: number
+  full_name: string | null
+  email: string | null
+  title: string | null
+  seniority: string | null
+  linkedin_url: string | null
+  company_name: string | null
+  company_linkedin_url: string | null
+  email_status: string
+  lead_name?: string
+  raw_data: any
+  created_at: string
+}
